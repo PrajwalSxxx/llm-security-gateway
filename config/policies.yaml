@@ -1,0 +1,17 @@
+allowed_tools:
+  - read_file
+  - write_file
+  - web_search
+  - database_query
+  - http_request
+blocked_paths:
+  - fake_secrets
+  - .env
+  - private
+blocked_destinations:
+  - "http://external.example"
+  - "https://external.example"
+require_approval_risk: 61
+block_risk: 81
+block_sensitive_external_transmission: true
+block_credential_access: true

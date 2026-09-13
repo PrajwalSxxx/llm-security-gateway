@@ -1,0 +1,8 @@
+services:
+  runtime-security:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./sandbox:/app/sandbox:ro
+      - ./runtime_security.db:/app/runtime_security.db
