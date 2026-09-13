@@ -41,6 +41,7 @@ except Exception:
     st.info("Start the backend to load metrics.")
 
 request = st.text_area("User request", "What is the capital of France?")
+document = st.selectbox("Optional local document", ["None", "report.txt", "company_policy.txt", "vendor_malicious.txt", "email_malicious.txt", "malicious_policy.txt"])
 content_path = None if document == "None" else document
 
 if st.button("Run local agent", type="primary"):
