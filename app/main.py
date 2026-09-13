@@ -56,3 +56,28 @@ def verify_audit():
 @app.get("/metrics")
 def metrics():
     return runtime.audit.metrics()
+
+
+@app.get("/tdg")
+def tdg():
+    return {"nodes": list(runtime.gateway.graph.nodes),
+            "edges":[{"source": source, "target": target} for source, target in runtime.gateway.graph.edges]}
+
+
+@app.get("/rag/status")
+def rag_status():
+    return runtime.retriever.status()
+
+
+@app.get("/policies")
+def policies():
+    return runtime.gateway.policies
+
+
+@app.get("/evaluation")
+def evaluation():
+    report = ROOT / "reports" / "evaluation_v2.json"
+    if not report.exists():
+        return {"available": False, "message": "Run python scripts/evaluate.py first"}
+    import json
+    return {"available": True, "report": json.loads(report.read_text(encoding="utf-8"))}

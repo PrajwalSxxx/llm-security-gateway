@@ -1,33 +1,37 @@
 from pathlib import Path
 from typing import Any
 
-from .config import SANDBOX
+from .config import ALLOWED_FILE_ROOTS, SANDBOX
+from .documents import extract_text, is_supported
 from .models import ToolAction
 
 
-def _safe(path: str) -> Path:
+def resolve_allowed_path(path: str) -> Path:
     root = SANDBOX.resolve()
     if path.lower().startswith("sandbox-"):
         path = "documents/" + path[8:]
-    target = (root / path).resolve()
+    candidate = Path(path).expanduser()
+    target = candidate.resolve() if candidate.is_absolute() else (root / path).resolve()
     if len(Path(path).parts) == 1 and not target.exists():
         document_target = (root / "documents" / path).resolve()
         if document_target.exists() or not Path(path).suffix:
             target = document_target
-    if root not in target.parents:
-        raise PermissionError("path is outside the sandbox")
+    if not any(target == allowed or allowed in target.parents for allowed in ALLOWED_FILE_ROOTS):
+        raise PermissionError("path is outside the configured allowed file roots")
     return target
 
 
 def execute(action: ToolAction) -> dict[str, Any]:
     args = action.arguments
     if action.tool == "read_file":
-        target = _safe(str(args["path"]))
+        target = resolve_allowed_path(str(args["path"]))
         if not target.exists():
             raise FileNotFoundError(str(target))
-        return {"text": target.read_text(encoding="utf-8", errors="replace"), "path": str(target)}
+        if not is_supported(target):
+            raise ValueError(f"unsupported document type: {target.suffix or 'none'}")
+        return {"text": extract_text(target), "path": str(target), "file_type": target.suffix.lower()}
     if action.tool == "write_file":
-        target = _safe(str(args["path"]))
+        target = resolve_allowed_path(str(args["path"]))
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(str(args.get("data", "")), encoding="utf-8")
         return {"written": str(target), "bytes": len(str(args.get("data", "")).encode())}

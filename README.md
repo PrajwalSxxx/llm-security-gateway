@@ -76,7 +76,7 @@ The evaluation writes actual output to `reports/evaluation_v2.json` and scenario
 
 ## Architecture and Security Flow
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/USER_GUIDE.md](docs/USER_GUIDE.md), [docs/OFFLINE_USER_GUIDE.md](docs/OFFLINE_USER_GUIDE.md), [docs/V2_UPGRADE.md](docs/V2_UPGRADE.md), [docs/HOW_IT_WORKS_SIMPLE.md](docs/HOW_IT_WORKS_SIMPLE.md), [docs/PROJECT_EXPLANATION.md](docs/PROJECT_EXPLANATION.md), and [docs/VIVA.md](docs/VIVA.md).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/HOW_TO_USE.md](docs/HOW_TO_USE.md), [docs/OFFLINE_USER_GUIDE.md](docs/OFFLINE_USER_GUIDE.md), [docs/FINAL_DEMO_GUIDE.md](docs/FINAL_DEMO_GUIDE.md), [docs/V2_UPGRADE.md](docs/V2_UPGRADE.md), [docs/HOW_IT_WORKS_SIMPLE.md](docs/HOW_IT_WORKS_SIMPLE.md), [docs/PROJECT_EXPLANATION.md](docs/PROJECT_EXPLANATION.md), and [docs/VIVA.md](docs/VIVA.md).
 
 The core rule is: the agent proposes an action, but it never directly executes it. `SecurityGateway.evaluate()` runs before `tools.execute()`.
 

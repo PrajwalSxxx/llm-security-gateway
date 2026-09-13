@@ -15,3 +15,11 @@ require_approval_risk: 61
 block_risk: 81
 block_sensitive_external_transmission: true
 block_credential_access: true
+risk_weights:
+  injection: 20
+  provenance: 10
+  intent_mismatch: 30
+  sensitive_data: 25
+  protected_path: 55
+  destination: 40
+  tdg: 95

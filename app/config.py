@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
 SANDBOX = ROOT / "sandbox"
+ALLOWED_FILE_ROOTS = [SANDBOX.resolve(), (Path.home() / "Documents").resolve(),
+                      (Path.home() / "Desktop").resolve(), ROOT.resolve()]
 POLICY_PATH = ROOT / "config" / "policies.yaml"
 load_dotenv(ROOT / ".env")
 
@@ -33,4 +35,5 @@ def settings() -> dict:
         "offline_mode": setting("OFFLINE_MODE", "true").lower() in {"1", "true", "yes", "on"},
         "database_path": ROOT / "runtime_security.db",
         "vector_database_path": ROOT / "vector_store.db",
+        "allowed_file_roots": [str(path) for path in ALLOWED_FILE_ROOTS],
     }

@@ -3,6 +3,8 @@ import math
 import sqlite3
 from pathlib import Path
 
+from .documents import extract_text, is_supported
+
 
 class LocalRetriever:
     """Semantic local RAG using Ollama embeddings and SQLite as an embedded vector store."""
@@ -37,7 +39,7 @@ class LocalRetriever:
 
     def index_documents(self, force: bool = False) -> int:
         files = sorted(self.documents_dir.glob("*"))
-        files = [path for path in files if path.is_file() and path.suffix.lower() in {".txt", ".md"}]
+        files = [path for path in files if path.is_file() and is_supported(path)]
         if force:
             with self._connect() as db:
                 db.execute("DELETE FROM document_chunks")
@@ -46,7 +48,7 @@ class LocalRetriever:
         pending = []
         for path in files:
             source = str(path.relative_to(self.documents_dir.parent)).replace("\\", "/")
-            for number, text in enumerate(self._chunks(path.read_text(encoding="utf-8", errors="replace"))):
+            for number, text in enumerate(self._chunks(extract_text(path))):
                 chunk_id = f"{source}::chunk-{number}"
                 if chunk_id not in existing:
                     pending.append((chunk_id, source, text))
@@ -59,6 +61,24 @@ class LocalRetriever:
                     db.execute("INSERT OR REPLACE INTO document_chunks VALUES(?,?,?,?,?,?)",
                                (chunk_id, source, "external_document", "UNTRUSTED", text, json.dumps(embedding)))
         return len(existing) + len(pending)
+
+    def retrieve_path(self, path: Path, query: str, source_type: str = "local_user_document") -> dict:
+        if not path.exists() or not path.is_file():
+            raise FileNotFoundError(str(path))
+        text = extract_text(path)
+        chunks = list(self._chunks(text)) or [""]
+        embeddings = self.provider.embed(chunks + [query])
+        query_embedding = embeddings[-1]
+        ranked = sorted(((self._cosine(query_embedding, embedding), number, chunk)
+                         for number, (embedding, chunk) in enumerate(zip(embeddings[:-1], chunks))),
+                        key=lambda item: item[0], reverse=True)[:3]
+        source = str(path)
+        metadata = [{"chunk_id": f"{source}::chunk-{number}", "source": source,
+                     "source_type": source_type, "trust_level": "UNTRUSTED",
+                     "content": chunk, "similarity": round(score, 4)}
+                    for score, number, chunk in ranked]
+        return {"source": source, "content": "\n\n".join(item["content"] for item in metadata),
+                "chunks": metadata, "trust_label": "UNTRUSTED_EXTERNAL_CONTENT", "provenance": "LOCAL_USER_DOCUMENT"}
 
     @staticmethod
     def _cosine(left: list[float], right: list[float]) -> float:

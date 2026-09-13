@@ -4,6 +4,7 @@ import networkx as nx
 
 from .config import SANDBOX, load_policies
 from .models import Intent, SecurityDecision, ToolAction
+from .tools import resolve_allowed_path
 
 
 SENSITIVE_PATTERNS = {
@@ -80,6 +81,7 @@ class SecurityGateway:
         signals: list[str] = []
         score = 0
         components: dict[str, int] = {}
+        weights = self.policies.get("risk_weights", {})
         tool = action.tool
         args = action.arguments
         path = str(args.get("path", ""))
@@ -94,10 +96,10 @@ class SecurityGateway:
         sensitive = detect_sensitive(content)
         if injection:
             signals.append("IPI indicators: " + ", ".join(injection))
-            components["injection_risk"] = 20
+            components["injection_risk"] = int(weights.get("injection", 20))
             score += components["injection_risk"]
         if action.provenance in {"RAG_DOCUMENT", "UNTRUSTED_DOCUMENT", "EMAIL", "WEB_CONTENT_SIMULATION"}:
-            components["provenance_risk"] = 10
+            components["provenance_risk"] = int(weights.get("provenance", 10))
             score += components["provenance_risk"]
             signals.append(f"Untrusted provenance: {action.provenance}")
         capability = TOOL_CAPABILITIES.get(tool)
@@ -112,10 +114,10 @@ class SecurityGateway:
             score = max(score, components["policy_risk"])
         if path and _is_secret_path(path):
             reasons.append("Credential or protected path access")
-            components["sensitive_data_risk"] = 55
+            components["sensitive_data_risk"] = int(weights.get("protected_path", 55))
             score += components["sensitive_data_risk"]
         if path and not self._safe_path(path):
-            reasons.append("Path escapes the controlled sandbox")
+            reasons.append("Path escapes the configured allowed file roots")
             components["policy_risk"] = max(components.get("policy_risk", 0), 95)
             score = max(score, 95)
         if tool == "write_file":
@@ -123,15 +125,15 @@ class SecurityGateway:
             score += components["write_risk"]
         if tool == "http_request" and destination and not destination.startswith(("http://localhost", "http://127.0.0.1", "http://[::1]")):
             reasons.append("External destination is disabled in offline mode")
-            components["destination_risk"] = 40
+            components["destination_risk"] = int(weights.get("destination", 40))
             score += components["destination_risk"]
         if sensitive:
             signals.append("Sensitive data: " + ", ".join(sensitive))
-            components["sensitive_data_risk"] = max(components.get("sensitive_data_risk", 0), 25)
+            components["sensitive_data_risk"] = max(components.get("sensitive_data_risk", 0), int(weights.get("sensitive_data", 25)))
             score += 25
         if tool not in intent.allowed_tools:
             reasons.append("Action conflicts with user intent")
-            components["intent_mismatch"] = 30
+            components["intent_mismatch"] = int(weights.get("intent_mismatch", 30))
             score += components["intent_mismatch"]
         if tool == "http_request" and sensitive:
             reasons.append("Sensitive data transmission is prohibited")
@@ -144,7 +146,7 @@ class SecurityGateway:
         self._update_graph(tool, bool(injection), _is_secret_path(path), bool(tool == "http_request" and sensitive))
         if len(self.history) >= 3 and self.history[-3:] == ["untrusted", "credential_access", "external_transmission"]:
             reasons.append("Dangerous tool dependency chain detected")
-            components["tdg_risk"] = 95
+            components["tdg_risk"] = int(weights.get("tdg", 95))
             score = max(score, components["tdg_risk"])
         if score > 0 and not reasons and injection:
             reasons.append("Suspicious instruction came from untrusted external content")
@@ -162,9 +164,9 @@ class SecurityGateway:
 
     def _safe_path(self, value: str) -> bool:
         try:
-            candidate = (SANDBOX / value).resolve()
-            return SANDBOX.resolve() in candidate.parents or candidate == SANDBOX.resolve()
-        except OSError:
+            resolve_allowed_path(value)
+            return True
+        except (OSError, PermissionError):
             return False
 
     def _update_graph(self, tool: str, untrusted: bool, credential: bool, external: bool):

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from app.audit import AuditLogger
+from app.documents import extract_requested_path
 from app.models import ToolAction
 from app.security import SecurityGateway, detect_injection, detect_sensitive, infer_intent
 
@@ -33,3 +34,10 @@ def test_audit_hash_chain(tmp_path: Path):
     with audit._connect() as db:
         db.execute("UPDATE audit_events SET payload = '{\"value\":2}' WHERE id=1")
     assert not audit.verify()[0]
+
+
+def test_windows_path_is_extracted_and_traversal_is_blocked():
+    request = r"Read C:\Users\Prajwal\Documents\project.pdf and summarize it."
+    assert extract_requested_path(request).endswith("project.pdf")
+    result = SecurityGateway().evaluate(r"Read ..\..\Windows\System32\config\SAM", ToolAction(tool="read_file", arguments={"path": r"..\..\Windows\System32\config\SAM"}))
+    assert result.decision == "BLOCK"

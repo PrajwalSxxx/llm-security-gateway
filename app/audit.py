@@ -50,7 +50,7 @@ class AuditLogger:
         with self._connect() as db:
             requests = db.execute("SELECT COUNT(*) AS count FROM audit_events WHERE event='request'").fetchone()["count"]
             decisions = db.execute("SELECT payload FROM audit_events WHERE event='tool_decision'").fetchall()
-        total = allowed = blocked = high_risk = 0
+        total = allowed = blocked = approval_required = high_risk = 0
         risk_total = 0
         for row in decisions:
             payload = json.loads(row["payload"])
@@ -60,9 +60,10 @@ class AuditLogger:
             risk_total += risk
             allowed += decision.get("decision") == "ALLOW"
             blocked += decision.get("decision") == "BLOCK"
+            approval_required += decision.get("decision") == "REQUIRE_APPROVAL"
             high_risk += risk >= 61
         return {"total_requests": requests, "total_tool_calls": total, "threats_detected": high_risk,
-                "actions_blocked": blocked, "actions_allowed": allowed,
+                "actions_blocked": blocked, "actions_allowed": allowed, "approval_required": approval_required,
                 "high_risk_actions": high_risk, "average_risk_score": round(risk_total / total, 2) if total else 0}
 
     def verify(self) -> tuple[bool, str]:
