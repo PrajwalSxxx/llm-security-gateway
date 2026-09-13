@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +7,13 @@ from .models import ToolAction
 
 def _safe(path: str) -> Path:
     root = SANDBOX.resolve()
+    if path.lower().startswith("sandbox-"):
+        path = "documents/" + path[8:]
     target = (root / path).resolve()
+    if len(Path(path).parts) == 1 and not target.exists():
+        document_target = (root / "documents" / path).resolve()
+        if document_target.exists() or not Path(path).suffix:
+            target = document_target
     if root not in target.parents:
         raise PermissionError("path is outside the sandbox")
     return target
@@ -31,5 +36,9 @@ def execute(action: ToolAction) -> dict[str, Any]:
     if action.tool == "database_query":
         return {"rows": [{"id": 1, "name": "simulated vendor", "status": "active"}]}
     if action.tool == "http_request":
-        return {"mock_request": {"method": args.get("method", "POST"), "url": args.get("url"), "sent": True}}
+        url = str(args.get("url", ""))
+        return {"mock_request": {"method": args.get("method", "POST"), "url": url,
+                                  "sent": True, "local_only": True,
+                                  "actual_transport": "in-process simulation",
+                                  "received_by": "simulated local service"}}
     raise ValueError(f"unknown tool: {action.tool}")

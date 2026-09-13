@@ -3,8 +3,8 @@
 ## Data Flow
 
 1. A user sends a request and optionally selects a local document.
-2. `LocalRetriever` reads a document and labels it `UNTRUSTED_EXTERNAL_CONTENT`.
-3. `MockAgent` proposes structured `ToolAction` objects.
+2. `LocalRetriever` chunks local documents, embeds them with Ollama `nomic-embed-text`, stores vectors in SQLite, and labels retrieved chunks `UNTRUSTED_EXTERNAL_CONTENT`.
+3. `RealLocalAgent` asks Ollama `qwen2.5:3b` for either a final answer or a structured `ToolAction`.
 4. `SecurityGateway` validates the tool, infers user intent, detects injection and sensitive data, calculates risk, updates the TDG, and applies YAML policies.
 5. Only an `ALLOW` decision reaches `tools.execute()`.
 6. Every request and tool decision is written to SQLite with a chained SHA-256 digest.
@@ -12,10 +12,11 @@
 ## Components
 
 - `app/models.py`: Pydantic action, intent, decision, and request schemas.
-- `app/agent.py`: deterministic agent and protected/vulnerable orchestration.
+- `app/llm/`: Ollama-only local provider and structured output client.
+- `app/agent.py`: local-model agent and baseline/protected orchestration.
 - `app/security.py`: intent, IPI, sensitive data, risk, policy, and TDG logic.
 - `app/tools.py`: sandbox-constrained tools; the network tool is mock-only.
-- `app/rag.py`: local token-overlap retrieval and untrusted-content labeling.
+- `app/rag.py`: local chunking, Ollama embeddings, SQLite vector search, and provenance.
 - `app/audit.py`: SQLite events and tamper-evident hash chain.
 - `app/main.py`: FastAPI endpoints.
 - `dashboard/streamlit_app.py`: operator dashboard.
@@ -30,7 +31,7 @@ The primary threat is an instruction embedded in a document that tries to overri
 
 ## RAG
 
-The prototype intentionally uses a dependency-free local index rather than a hosted embedding service. It tokenizes local text, selects the highest-overlap document, and adds the trust label. This demonstrates the trust boundary; production systems should use a real vector store, provenance, chunk-level filtering, and retrieval evaluation.
+The application uses no hosted retrieval service. Local chunks are embedded by `nomic-embed-text` through Ollama and stored as JSON vectors in SQLite. Cosine similarity selects top chunks, and each result carries source, source type, trust level, and chunk ID.
 
 ## Tool Dependency Graph
 

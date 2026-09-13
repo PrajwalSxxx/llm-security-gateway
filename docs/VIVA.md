@@ -70,4 +70,28 @@ The evaluation script generates 50 benign and 50 malicious local scenarios, runs
 
 ## Main limitations?
 
-The planner, retrieval, and network are mocks; detection is incomplete; no authentication or production multi-tenant isolation exists; and SQLite hash chaining is only tamper-evident.
+The model and embedding service are local Ollama processes, while search, database, and HTTP tools are controlled local simulations. Detection is incomplete; no authentication or production multi-tenant isolation exists; and SQLite hash chaining is only tamper-evident.
+
+## Why Ollama?
+
+Ollama serves a model locally through `localhost:11434`, so prompts, documents, and responses remain on the computer during normal operation.
+
+## Why a local LLM?
+
+It removes cloud-provider dependency and allows the project to be demonstrated offline with controlled data.
+
+## Why provenance?
+
+The same text has different trust depending on whether it came from the user, policy, a retrieved document, or a tool result. The gateway adds scrutiny to untrusted sources.
+
+## Why local embeddings?
+
+Semantic retrieval needs vectors. `nomic-embed-text` runs through Ollama locally, so documents are not uploaded to an embedding service.
+
+## Why baseline versus protected?
+
+The baseline shows what a tool-capable local model can propose without an authorization boundary. The protected mode proves that the gateway remains outside the model's authority.
+
+## Why approval?
+
+Some actions are risky but not automatically forbidden. `REQUIRE_APPROVAL` pauses execution and lets an operator approve or reject it through the dashboard.

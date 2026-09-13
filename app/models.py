@@ -10,12 +10,17 @@ class ToolAction(BaseModel):
     tool: str
     arguments: dict[str, Any] = Field(default_factory=dict)
     source: str = "agent"
+    provenance: str = "AGENT_GENERATED"
+    capabilities: list[str] = Field(default_factory=list)
+    data_class: str = "UNKNOWN"
+    destination: str | None = None
 
 
 class Intent(BaseModel):
     goal: str
     allowed_tools: list[str]
     allowed_operations: list[str]
+    target_resources: list[str] = Field(default_factory=list)
     external_transmission: bool = False
 
 
@@ -27,9 +32,13 @@ class SecurityDecision(BaseModel):
     intent: Intent
     action: ToolAction
     tdg_path: list[str] = Field(default_factory=list)
+    risk_components: dict[str, int] = Field(default_factory=dict)
+    policy_result: str = ""
 
 
 class RequestInput(BaseModel):
     user_request: str
     content_path: str | None = None
-    mode: Literal["PROTECTED", "VULNERABLE", "SAFE_MOCK"] = "PROTECTED"
+    mode: Literal["PROTECTED", "VULNERABLE"] = "PROTECTED"
+    session_id: str | None = None
+    use_rag: bool = False

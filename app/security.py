@@ -1,7 +1,5 @@
 import re
 from pathlib import Path
-from typing import Any
-
 import networkx as nx
 
 from .config import SANDBOX, load_policies
@@ -19,6 +17,13 @@ SENSITIVE_PATTERNS = {
 }
 INJECTION_TERMS = ("ignore previous", "system message", "developer instruction", "reveal secrets",
                    "send credentials", "upload this file", "override", "call http_request")
+TOOL_CAPABILITIES = {
+    "read_file": {"capabilities": ["READ_FILE"], "data_class": "PUBLIC_DOCUMENT", "risk": 10},
+    "write_file": {"capabilities": ["WRITE_FILE"], "data_class": "LOCAL_OUTPUT", "risk": 40},
+    "web_search": {"capabilities": ["LOCAL_SEARCH"], "data_class": "PUBLIC_DOCUMENT", "risk": 20},
+    "database_query": {"capabilities": ["READ_DATABASE"], "data_class": "LOCAL_DATABASE", "risk": 25},
+    "http_request": {"capabilities": ["EXTERNAL_NETWORK"], "data_class": "SENSITIVE_OR_PUBLIC", "risk": 50},
+}
 
 
 def detect_sensitive(text: str) -> list[str]:
@@ -30,14 +35,31 @@ def detect_injection(text: str) -> list[str]:
     return [term for term in INJECTION_TERMS if term in lowered]
 
 
+def validate_action(action: ToolAction) -> list[str]:
+    required = {"read_file": ("path",), "write_file": ("path",), "web_search": ("query",),
+                "database_query": ("query",), "http_request": ("url",)}
+    if action.tool not in required:
+        return ["Unknown tool name"]
+    errors = [f"Missing required argument: {name}" for name in required[action.tool] if name not in action.arguments]
+    if "path" in action.arguments and not isinstance(action.arguments["path"], str):
+        errors.append("path must be a string")
+    if "url" in action.arguments and not isinstance(action.arguments["url"], str):
+        errors.append("url must be a string")
+    return errors
+
+
 def infer_intent(request: str) -> Intent:
     lower = request.lower()
+    wants_write = "write" in lower or "save" in lower
     if any(word in lower for word in ("summarize", "read", "review")):
-        return Intent(goal="document_summarization", allowed_tools=["read_file"], allowed_operations=["read"])
+        if wants_write:
+            return Intent(goal="document_summarization_and_save", allowed_tools=["read_file", "write_file"],
+                          allowed_operations=["read", "write"], target_resources=["requested_document", "requested_output"])
+        return Intent(goal="document_summarization", allowed_tools=["read_file"], allowed_operations=["read"], target_resources=["requested_document"])
     if "search" in lower:
-        return Intent(goal="web_search", allowed_tools=["web_search"], allowed_operations=["search"])
+        return Intent(goal="web_search", allowed_tools=["web_search"], allowed_operations=["search"], target_resources=["local_search"])
     if "write" in lower or "save" in lower:
-        return Intent(goal="write_document", allowed_tools=["write_file"], allowed_operations=["write"])
+        return Intent(goal="write_document", allowed_tools=["write_file"], allowed_operations=["write"], target_resources=["requested_output"])
     return Intent(goal="general_request", allowed_tools=[], allowed_operations=[])
 
 
@@ -57,47 +79,73 @@ class SecurityGateway:
         reasons: list[str] = []
         signals: list[str] = []
         score = 0
+        components: dict[str, int] = {}
         tool = action.tool
         args = action.arguments
         path = str(args.get("path", ""))
         destination = str(args.get("url", args.get("destination", "")))
         content = external_content + " " + str(args.get("data", ""))
+        validation_errors = validate_action(action)
+        if validation_errors:
+            reasons.extend(validation_errors)
+            components["policy_risk"] = 100
+            score = 100
         injection = detect_injection(external_content)
         sensitive = detect_sensitive(content)
         if injection:
             signals.append("IPI indicators: " + ", ".join(injection))
-            score += 20
+            components["injection_risk"] = 20
+            score += components["injection_risk"]
+        if action.provenance in {"RAG_DOCUMENT", "UNTRUSTED_DOCUMENT", "EMAIL", "WEB_CONTENT_SIMULATION"}:
+            components["provenance_risk"] = 10
+            score += components["provenance_risk"]
+            signals.append(f"Untrusted provenance: {action.provenance}")
+        capability = TOOL_CAPABILITIES.get(tool)
+        if capability:
+            action.capabilities = action.capabilities or capability["capabilities"]
+            action.data_class = action.data_class if action.data_class != "UNKNOWN" else capability["data_class"]
+            components["tool_risk"] = capability["risk"]
+            score += components["tool_risk"]
         if tool not in self.policies.get("allowed_tools", []):
             reasons.append("Unknown or disallowed tool")
-            score = max(score, 95)
+            components["policy_risk"] = 95
+            score = max(score, components["policy_risk"])
         if path and _is_secret_path(path):
             reasons.append("Credential or protected path access")
-            score += 55
+            components["sensitive_data_risk"] = 55
+            score += components["sensitive_data_risk"]
         if path and not self._safe_path(path):
             reasons.append("Path escapes the controlled sandbox")
+            components["policy_risk"] = max(components.get("policy_risk", 0), 95)
             score = max(score, 95)
         if tool == "write_file":
-            score += 25
-        if tool in ("http_request", "web_search"):
-            score += 20
-        if tool == "http_request" and destination and destination.startswith(("http://", "https://")):
-            score += 25
+            components["write_risk"] = 25
+            score += components["write_risk"]
+        if tool == "http_request" and destination and not destination.startswith(("http://localhost", "http://127.0.0.1", "http://[::1]")):
+            reasons.append("External destination is disabled in offline mode")
+            components["destination_risk"] = 40
+            score += components["destination_risk"]
         if sensitive:
             signals.append("Sensitive data: " + ", ".join(sensitive))
+            components["sensitive_data_risk"] = max(components.get("sensitive_data_risk", 0), 25)
             score += 25
         if tool not in intent.allowed_tools:
             reasons.append("Action conflicts with user intent")
-            score += 30
+            components["intent_mismatch"] = 30
+            score += components["intent_mismatch"]
         if tool == "http_request" and sensitive:
             reasons.append("Sensitive data transmission is prohibited")
+            components["policy_risk"] = max(components.get("policy_risk", 0), 95)
             score = max(score, 95)
         if tool == "http_request" and destination in self.policies.get("blocked_destinations", []):
             reasons.append("Destination is blocked by policy")
+            components["policy_risk"] = max(components.get("policy_risk", 0), 90)
             score = max(score, 90)
         self._update_graph(tool, bool(injection), _is_secret_path(path), bool(tool == "http_request" and sensitive))
         if len(self.history) >= 3 and self.history[-3:] == ["untrusted", "credential_access", "external_transmission"]:
             reasons.append("Dangerous tool dependency chain detected")
-            score = max(score, 95)
+            components["tdg_risk"] = 95
+            score = max(score, components["tdg_risk"])
         if score > 0 and not reasons and injection:
             reasons.append("Suspicious instruction came from untrusted external content")
         score = min(100, score)
@@ -109,7 +157,8 @@ class SecurityGateway:
         if decision == "ALLOW" and injection:
             decision = "REQUIRE_APPROVAL"
         return SecurityDecision(decision=decision, risk_score=score, reasons=reasons or ["Action matches intent and policy"],
-                                signals=signals, intent=intent, action=action, tdg_path=list(self.history))
+                                signals=signals, intent=intent, action=action, tdg_path=list(self.history),
+                                risk_components=components, policy_result=decision)
 
     def _safe_path(self, value: str) -> bool:
         try:

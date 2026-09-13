@@ -21,3 +21,16 @@ def load_policies() -> dict:
 
 def setting(name: str, default: str = "") -> str:
     return os.getenv(name, default)
+
+
+def settings() -> dict:
+    provider = setting("LLM_PROVIDER", "ollama").lower()
+    return {
+        "llm_provider": provider,
+        "ollama_base_url": setting("OLLAMA_BASE_URL", "http://localhost:11434"),
+        "ollama_model": setting("OLLAMA_MODEL", "qwen2.5:3b"),
+        "embedding_model": setting("EMBEDDING_MODEL", "nomic-embed-text"),
+        "offline_mode": setting("OFFLINE_MODE", "true").lower() in {"1", "true", "yes", "on"},
+        "database_path": ROOT / "runtime_security.db",
+        "vector_database_path": ROOT / "vector_store.db",
+    }
