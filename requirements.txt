@@ -9,3 +9,4 @@ streamlit>=1.42,<2
 pytest>=8.3,<9
 pypdf>=5.0,<7
 python-docx>=1.1,<2
+reportlab>=5.0,<6
