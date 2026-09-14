@@ -1,22 +1,37 @@
 import json
 import os
 import urllib.request
+from datetime import datetime
 
 import streamlit as st
 
 
 st.set_page_config(page_title="Local AI Security Assistant", page_icon="🛡️", layout="wide", initial_sidebar_state="expanded")
+theme = st.sidebar.selectbox("Theme", ["Light", "Dark"], index=0, key="theme")
 st.markdown("""
 <style>
-.block-container { padding-top: 1.4rem; max-width: 1500px; }
+.block-container { padding-top: 1.2rem; max-width: 1500px; }
 .brand { font-size: 1.65rem; font-weight: 750; letter-spacing: -0.03em; }
 .muted { color: #718096; font-size: 0.9rem; }
 .security-card { border: 1px solid #dbe4f0; border-left: 5px solid #3182ce; border-radius: 12px; padding: 1rem; margin: .7rem 0; background: linear-gradient(110deg,#f7fbff,#ffffff); }
 .security-block { border-left-color: #e53e3e; background: #fff8f8; }
 .security-approval { border-left-color: #dd6b20; background: #fffaf2; }
 .pill { padding: .22rem .62rem; border-radius: 999px; background: #edf6ff; color: #2166a5; font-size: .82rem; font-weight: 650; }
+.activity { border: 1px solid #e2e8f0; border-radius: 16px; padding: 1rem; background: #fbfdff; }
+.activity-title { font-weight: 700; font-size: 1.05rem; margin-bottom: .8rem; }
+.chat-empty { text-align: center; padding: 5rem 1rem 3rem; }
+.chat-empty h1 { font-size: 2.35rem; letter-spacing: -.04em; }
 </style>
 """, unsafe_allow_html=True)
+if theme == "Dark":
+    st.markdown("""
+    <style>
+    .stApp { background: #111827; color: #edf2f7; }
+    .activity, .security-card { background: #182334; border-color: #334155; color: #edf2f7; }
+    .security-block { background: #2a1b22; } .security-approval { background: #2c2418; }
+    .muted { color: #a0aec0; }
+    </style>
+    """, unsafe_allow_html=True)
 API = st.sidebar.text_input("FastAPI URL", os.getenv("BACKEND_URL", "http://127.0.0.1:8000"))
 
 
@@ -83,6 +98,29 @@ def render_chat_result(result):
             st.json(result["retrieved"])
 
 
+def render_activity(result):
+    st.markdown("<div class='activity'><div class='activity-title'>Live Agent Activity</div>", unsafe_allow_html=True)
+    if not result:
+        st.markdown("<span class='muted'>Waiting for a local request...</span>", unsafe_allow_html=True)
+    else:
+        events = result.get("events", [])
+        rows = [("✓", "Request understood"), ("✓", "Ollama response received"),
+                ("✓" if events else "·", "Agent decision"),
+                ("✓" if events else "·", "Tool proposal"),
+                ("✓" if events else "·", "Runtime security"),
+                ("✓" if result.get("retrieved") else "·", "Local RAG / document context"),
+                ("✓", "Final answer")]
+        for icon, label in rows:
+            st.markdown(f"<div style='padding:.38rem 0'>{icon} &nbsp; {label}</div>", unsafe_allow_html=True)
+        if events:
+            latest = events[-1].get("decision", {})
+            st.divider()
+            st.caption("Latest security decision")
+            st.metric("Risk", f"{latest.get('risk_score', 0)} / 100")
+            st.write(latest.get("decision", "UNKNOWN"))
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 def run_console():
     st.markdown("<div class='brand'>Local AI Security Assistant</div><div class='muted'>A local Ollama assistant with a runtime authorization boundary.</div>", unsafe_allow_html=True)
     try:
@@ -103,15 +141,34 @@ def run_console():
         use_rag = st.checkbox("Semantic RAG", value=False, key="chat-rag")
     if st.button("New chat", key="new-chat"):
         st.session_state["messages"] = []
+        st.session_state["last_result"] = None
         st.rerun()
-    for message in st.session_state.get("messages", []):
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-            if message.get("result"):
-                render_chat_result(message["result"])
-    prompt = st.chat_input("Message the local AI...")
+    messages = st.session_state.get("messages", [])
+    chat_col, activity_col = st.columns([2.15, 1])
+    with chat_col:
+        if not messages:
+            st.markdown("<div class='chat-empty'><h1>What can your local AI help with?</h1><p class='muted'>Your prompts, documents, embeddings, and security events stay on this computer.</p></div>", unsafe_allow_html=True)
+            quick = st.columns(3)
+            quick_prompts = [("Analyze a document", "Read documents/report.txt and summarize it."),
+                             ("Explain security", "Explain how indirect prompt injection works."),
+                             ("Run a security demo", "Summarize vendor_malicious.txt.")]
+            for column, (label, prompt_text) in zip(quick, quick_prompts):
+                if column.button(label, key="quick-" + label):
+                    st.session_state["queued_prompt"] = prompt_text
+                    st.rerun()
+        for message in messages:
+            with st.chat_message(message["role"]):
+                if message.get("timestamp"):
+                    st.caption(message["timestamp"])
+                st.markdown(message["content"])
+                if message.get("result"):
+                    render_chat_result(message["result"])
+    with activity_col:
+        render_activity(st.session_state.get("last_result"))
+    prompt = st.chat_input("Message the local AI...") or st.session_state.pop("queued_prompt", None)
     if prompt:
-        st.session_state.setdefault("messages", []).append({"role": "user", "content": prompt})
+        timestamp = datetime.now().strftime("%H:%M")
+        st.session_state.setdefault("messages", []).append({"role": "user", "content": prompt, "timestamp": timestamp})
         with st.chat_message("user"):
             st.markdown(prompt)
         with st.chat_message("assistant"):
@@ -119,7 +176,7 @@ def run_console():
                 try:
                     result = post("/run", {"user_request": prompt, "content_path": None if selected == "None" else selected,
                                            "use_rag": use_rag, "mode": mode})
-                    st.session_state["messages"].append({"role": "assistant", "content": result.get("answer", ""), "result": result})
+                    st.session_state["messages"].append({"role": "assistant", "content": result.get("answer", ""), "result": result, "timestamp": datetime.now().strftime("%H:%M")})
                     st.markdown(result.get("answer", ""))
                     render_chat_result(result)
                 except Exception as exc:
