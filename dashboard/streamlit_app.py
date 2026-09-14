@@ -1,16 +1,23 @@
 import json
 import os
-import urllib.parse
 import urllib.request
 
 import streamlit as st
 
 
-st.set_page_config(page_title="LLM Runtime Security Control Center", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="Local AI Security Assistant", page_icon="🛡️", layout="wide", initial_sidebar_state="expanded")
+st.markdown("""
+<style>
+.block-container { padding-top: 1.4rem; max-width: 1500px; }
+.brand { font-size: 1.65rem; font-weight: 750; letter-spacing: -0.03em; }
+.muted { color: #718096; font-size: 0.9rem; }
+.security-card { border: 1px solid #dbe4f0; border-left: 5px solid #3182ce; border-radius: 12px; padding: 1rem; margin: .7rem 0; background: linear-gradient(110deg,#f7fbff,#ffffff); }
+.security-block { border-left-color: #e53e3e; background: #fff8f8; }
+.security-approval { border-left-color: #dd6b20; background: #fffaf2; }
+.pill { padding: .22rem .62rem; border-radius: 999px; background: #edf6ff; color: #2166a5; font-size: .82rem; font-weight: 650; }
+</style>
+""", unsafe_allow_html=True)
 API = st.sidebar.text_input("FastAPI URL", os.getenv("BACKEND_URL", "http://127.0.0.1:8000"))
-PAGE_NAMES = ["Live Monitor", "Agent Console", "Threat Center", "Attack Simulator", "Tool Dependency Graph",
-              "RAG Explorer", "Audit Explorer", "Policy Center", "Risk Analytics", "Evaluation", "System Health", "Settings", "Final Demo"]
-page = st.sidebar.radio("Control Center", PAGE_NAMES)
 
 
 def get(path):
@@ -22,22 +29,101 @@ def post(path, payload):
     return json.loads(urllib.request.urlopen(request, timeout=600).read())
 
 
-def run_console(default_request="What is the capital of France?", default_document=""):
-    request = st.text_area("Natural-language request", default_request, key="request-" + page)
-    content_path = st.text_input("Optional local path or sandbox document", default_document, key="path-" + page)
-    mode = st.selectbox("Mode", ["PROTECTED", "VULNERABLE"], key="mode-" + page)
-    use_rag = st.checkbox("Use local semantic RAG", value=bool(content_path), key="rag-" + page)
-    if st.button("Run local agent", type="primary", key="run-" + page):
+st.sidebar.markdown("<div class='brand'>Local AI<br>Security Assistant</div><div class='muted'>Ollama + runtime protection</div>", unsafe_allow_html=True)
+try:
+    sidebar_status = get("/local-status")
+    st.sidebar.success(f"Ollama connected · {sidebar_status.get('models', ['local'])[ -1]}")
+    st.sidebar.caption(f"LOCAL · OFFLINE MODE {'ON' if sidebar_status.get('offline_mode') else 'OFF'}")
+except Exception:
+    st.sidebar.error("Ollama/backend offline")
+st.sidebar.markdown("### AI")
+page = st.sidebar.radio("", ["Agent Console", "Conversations", "Documents"], label_visibility="collapsed")
+st.sidebar.markdown("### Security")
+security_page = st.sidebar.radio("", ["Live Monitor", "Threat Center", "Attack Simulator", "Tool Dependency Graph", "Audit Explorer", "Policy Center"], label_visibility="collapsed")
+st.sidebar.markdown("### Analytics")
+analytics_page = st.sidebar.radio("", ["Risk Analytics", "Evaluation"], label_visibility="collapsed")
+st.sidebar.markdown("### System")
+system_page = st.sidebar.radio("", ["System Health", "Settings", "Final Demo"], label_visibility="collapsed")
+
+
+def selected_page():
+    if page != "Agent Console":
+        return page
+    if security_page != "Live Monitor" and st.session_state.get("dashboard_override"):
+        return st.session_state.pop("dashboard_override")
+    return page
+
+
+def security_card(event):
+    decision = event.get("decision", {})
+    state = decision.get("decision", "UNKNOWN")
+    css = "security-block" if state == "BLOCK" else "security-approval" if state == "REQUIRE_APPROVAL" else ""
+    icon = "🚨" if state == "BLOCK" else "⚠️" if state == "REQUIRE_APPROVAL" else "🛡️"
+    label = "ACTION BLOCKED" if state == "BLOCK" else "APPROVAL REQUIRED" if state == "REQUIRE_APPROVAL" else "RUNTIME SECURITY"
+    st.markdown(f"<div class='security-card {css}'><b>{icon} {label}</b><br>"
+                f"Action: <code>{event.get('tool')}</code> · Decision: <b>{state}</b> · Risk: <b>{decision.get('risk_score', 0)} / 100</b><br>"
+                f"Source: {event.get('source', 'AGENT_GENERATED')} · Data: {event.get('data_class', 'UNKNOWN')}</div>", unsafe_allow_html=True)
+    with st.expander("View security analysis", expanded=False):
+        st.write("**Reasons:** " + "; ".join(decision.get("reasons", [])))
+        st.json({"capabilities": event.get("capabilities"), "arguments": event.get("arguments"),
+                 "risk_components": decision.get("risk_components"), "intent": decision.get("intent"),
+                 "tdg": decision.get("tdg_path"), "execution_result": event.get("execution_result")})
+
+
+def render_chat_result(result):
+    if result.get("events"):
+        for index, event in enumerate(result["events"], 1):
+            security_card(event)
+            decision = event.get("decision", {})
+            if decision.get("decision") == "REQUIRE_APPROVAL":
+                if st.button("Approve action", key=f"approve-chat-{result['session_id']}-{index}"):
+                    st.success(json.dumps(post("/approve/" + result["session_id"], {})))
+    if result.get("retrieved"):
+        with st.expander("Local retrieval and provenance", expanded=False):
+            st.json(result["retrieved"])
+
+
+def run_console():
+    st.markdown("<div class='brand'>Local AI Security Assistant</div><div class='muted'>A local Ollama assistant with a runtime authorization boundary.</div>", unsafe_allow_html=True)
+    try:
+        status = get("/local-status")
+        st.markdown(f"<span class='pill'>● Ollama Connected</span> &nbsp; Model: <b>{status.get('models', ['unknown'])[-1]}</b> &nbsp; Mode: <b>Fully Local</b> &nbsp; Internet: <b>Disabled</b>", unsafe_allow_html=True)
+    except Exception:
+        st.error("Ollama is not running. Start Ollama and try again.")
+    controls = st.columns([2, 2, 1])
+    with controls[0]:
+        mode = st.selectbox("Security mode", ["PROTECTED", "VULNERABLE"], key="chat-mode")
+    with controls[1]:
         try:
-            result = post("/run", {"user_request": request, "content_path": content_path or None, "use_rag": use_rag, "mode": mode})
-            st.session_state["last_result"] = result
-        except Exception as exc:
-            st.error(f"Request failed: {exc}")
-    result = st.session_state.get("last_result")
-    if result:
-        st.subheader("Final answer")
-        st.write(result.get("answer", ""))
-        render_trace(result)
+            documents = [item["path"] for item in get("/documents").get("documents", [])]
+        except Exception:
+            documents = []
+        selected = st.selectbox("Local attachment", ["None"] + documents, key="chat-document")
+    with controls[2]:
+        use_rag = st.checkbox("Semantic RAG", value=False, key="chat-rag")
+    if st.button("New chat", key="new-chat"):
+        st.session_state["messages"] = []
+        st.rerun()
+    for message in st.session_state.get("messages", []):
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+            if message.get("result"):
+                render_chat_result(message["result"])
+    prompt = st.chat_input("Message the local AI...")
+    if prompt:
+        st.session_state.setdefault("messages", []).append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        with st.chat_message("assistant"):
+            with st.spinner("Ollama is working locally..."):
+                try:
+                    result = post("/run", {"user_request": prompt, "content_path": None if selected == "None" else selected,
+                                           "use_rag": use_rag, "mode": mode})
+                    st.session_state["messages"].append({"role": "assistant", "content": result.get("answer", ""), "result": result})
+                    st.markdown(result.get("answer", ""))
+                    render_chat_result(result)
+                except Exception as exc:
+                    st.error(str(exc))
 
 
 def render_trace(result):
@@ -235,8 +321,31 @@ def final_demo():
         render_trace(st.session_state["last_result"])
 
 
-pages = {"Live Monitor": live_monitor, "Agent Console": run_console, "Threat Center": threat_center,
-         "Attack Simulator": attack_simulator, "Tool Dependency Graph": graph_page, "RAG Explorer": rag_explorer,
-         "Audit Explorer": audit_explorer, "Policy Center": policy_center, "Risk Analytics": risk_analytics,
-         "Evaluation": evaluation_page, "System Health": system_health, "Settings": settings_page, "Final Demo": final_demo}
-pages[page]()
+def conversations_page():
+    st.title("Conversations")
+    messages = st.session_state.get("messages", [])
+    if not messages:
+        st.info("No local conversation yet. Open Agent Console to start one.")
+    else:
+        st.write(f"Current local conversation: {len(messages)} messages")
+        for message in messages:
+            st.write(f"**{message['role'].title()}**: {message['content'][:180]}")
+
+
+def documents_page():
+    st.title("Local Documents")
+    st.caption("These are local resources reported by the backend. No document is uploaded to a cloud service.")
+    try:
+        documents = get("/documents").get("documents", [])
+        st.dataframe(documents, use_container_width=True)
+    except Exception as exc:
+        st.error(str(exc))
+
+
+pages = {"Agent Console": run_console, "Conversations": conversations_page, "Documents": documents_page,
+         "Live Monitor": live_monitor, "Threat Center": threat_center, "Attack Simulator": attack_simulator,
+         "Tool Dependency Graph": graph_page, "RAG Explorer": rag_explorer, "Audit Explorer": audit_explorer,
+         "Policy Center": policy_center, "Risk Analytics": risk_analytics, "Evaluation": evaluation_page,
+         "System Health": system_health, "Settings": settings_page, "Final Demo": final_demo}
+active_page = page if page in {"Agent Console", "Conversations", "Documents"} else security_page if security_page != "Live Monitor" else analytics_page if analytics_page != "Risk Analytics" else system_page if system_page != "System Health" else "Live Monitor"
+pages[active_page]()

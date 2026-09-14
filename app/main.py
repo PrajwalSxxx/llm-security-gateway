@@ -81,3 +81,13 @@ def evaluation():
         return {"available": False, "message": "Run python scripts/evaluate.py first"}
     import json
     return {"available": True, "report": json.loads(report.read_text(encoding="utf-8"))}
+
+
+@app.get("/documents")
+def documents():
+    from .documents import is_supported
+    directory = ROOT / "sandbox" / "documents"
+    return {"documents": [{"path": str(path.relative_to(ROOT / "sandbox")).replace("\\", "/"),
+                           "name": path.name, "suffix": path.suffix.lower(), "size": path.stat().st_size,
+                           "indexed": is_supported(path)}
+                          for path in sorted(directory.rglob("*")) if path.is_file()]}
