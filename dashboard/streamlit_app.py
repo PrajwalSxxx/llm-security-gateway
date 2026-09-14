@@ -21,6 +21,8 @@ st.markdown("""
 .activity-title { font-weight: 700; font-size: 1.05rem; margin-bottom: .8rem; }
 .chat-empty { text-align: center; padding: 5rem 1rem 3rem; }
 .chat-empty h1 { font-size: 2.35rem; letter-spacing: -.04em; }
+section[data-testid="stSidebar"] > div:first-child { height: 100vh; overflow-y: auto; }
+section[data-testid="stSidebar"] [data-testid="stSelectbox"] { margin-bottom: .6rem; }
 </style>
 """, unsafe_allow_html=True)
 if theme == "Dark":
@@ -51,22 +53,17 @@ try:
     st.sidebar.caption(f"LOCAL · OFFLINE MODE {'ON' if sidebar_status.get('offline_mode') else 'OFF'}")
 except Exception:
     st.sidebar.error("Ollama/backend offline")
-st.sidebar.markdown("### AI")
-page = st.sidebar.radio("", ["Agent Console", "Conversations", "Documents"], label_visibility="collapsed")
-st.sidebar.markdown("### Security")
-security_page = st.sidebar.radio("", ["Live Monitor", "Threat Center", "Attack Simulator", "Tool Dependency Graph", "Audit Explorer", "Policy Center"], label_visibility="collapsed")
-st.sidebar.markdown("### Analytics")
-analytics_page = st.sidebar.radio("", ["Risk Analytics", "Evaluation"], label_visibility="collapsed")
-st.sidebar.markdown("### System")
-system_page = st.sidebar.radio("", ["System Health", "Settings", "Final Demo"], label_visibility="collapsed")
-
-
-def selected_page():
-    if page != "Agent Console":
-        return page
-    if security_page != "Live Monitor" and st.session_state.get("dashboard_override"):
-        return st.session_state.pop("dashboard_override")
-    return page
+st.sidebar.markdown("### Workspace")
+navigation = [
+    "AI · Agent Console", "AI · Conversations", "AI · Documents",
+    "Security · Live Monitor", "Security · Threat Center", "Security · Attack Simulator",
+    "Security · Tool Dependency Graph", "Security · Audit Explorer", "Security · Policy Center",
+    "Analytics · Risk Analytics", "Analytics · Evaluation",
+    "System · System Health", "System · Settings", "System · Final Demo",
+]
+navigation_label = st.sidebar.selectbox("Navigate", navigation, label_visibility="collapsed")
+page = navigation_label.split(" · ", 1)[1]
+st.sidebar.caption("Scroll to access every workspace section")
 
 
 def security_card(event):
@@ -225,7 +222,10 @@ def live_monitor():
         for event in events:
             payload = json.loads(event["payload"]) if isinstance(event.get("payload"), str) else event.get("payload", {})
             decision = payload.get("decision", {})
-            st.write(f"{event['timestamp']} | {decision.get('decision', event['event'])} | {payload.get('tool', event['event'])} | risk {decision.get('risk_score', 0)}")
+            state = decision.get("decision", event["event"])
+            with st.container(border=True):
+                st.markdown(f"**{event['timestamp']}**  ·  **{state}**  ·  `{payload.get('tool', event['event'])}`")
+                st.caption(f"Risk {decision.get('risk_score', 0)}/100 · source {payload.get('source', 'n/a')}")
     except Exception as exc:
         st.error(f"Backend unavailable: {exc}")
 
@@ -234,12 +234,27 @@ def threat_center():
     st.title("Threat Center")
     try:
         events = get("/audit?limit=200")["events"]
+        tool_filter = st.selectbox("Tool filter", ["ALL", "read_file", "write_file", "http_request", "web_search"])
         filter_decision = st.selectbox("Decision filter", ["ALL", "BLOCK", "REQUIRE_APPROVAL", "ALLOW"])
+        threat_count = 0
         for event in events:
             payload = json.loads(event["payload"]) if isinstance(event.get("payload"), str) else event.get("payload", {})
             decision = payload.get("decision", {}).get("decision", "")
-            if event["event"] == "tool_decision" and (filter_decision == "ALL" or decision == filter_decision):
-                st.expander(f"{decision} | risk {payload.get('decision', {}).get('risk_score', 0)} | {payload.get('tool')}").json(payload)
+            tool = payload.get("tool", "")
+            if event["event"] == "tool_decision" and (filter_decision == "ALL" or decision == filter_decision) and (tool_filter == "ALL" or tool == tool_filter):
+                threat_count += 1
+                risk = payload.get("decision", {}).get("risk_score", 0)
+                severity = "CRITICAL" if risk >= 81 else "HIGH" if risk >= 61 else "MEDIUM" if risk >= 31 else "LOW"
+                with st.container(border=True):
+                    st.markdown(f"**{'🚨' if risk >= 81 else '⚠️' if risk >= 61 else '🛡️'} {severity} · {decision}**")
+                    st.write(f"`{tool}` · risk **{risk}/100** · source **{payload.get('source', 'unknown')}**")
+                    st.caption(event["timestamp"])
+                    with st.expander("Investigate event"):
+                        st.write("**Reasons:** " + "; ".join(payload.get("decision", {}).get("reasons", [])))
+                        st.json({"arguments": payload.get("arguments"), "risk_components": payload.get("decision", {}).get("risk_components"),
+                                 "intent": payload.get("decision", {}).get("intent"), "tdg": payload.get("decision", {}).get("tdg_path")})
+        if not threat_count:
+            st.info("No matching security events. Run an agent request or attack simulation to generate activity.")
     except Exception as exc:
         st.error(str(exc))
 
@@ -275,8 +290,12 @@ def graph_page():
         for edge in graph["edges"]:
             lines.append(f'"{edge["source"]}" -> "{edge["target"]}";')
         lines.append("}")
-        st.graphviz_chart("\n".join(lines))
-        st.json(graph)
+        st.graphviz_chart("\n".join(lines), use_container_width=True)
+        selected = st.selectbox("Inspect graph node", ["None"] + graph["nodes"])
+        if selected != "None":
+            incoming = [edge["source"] for edge in graph["edges"] if edge["target"] == selected]
+            outgoing = [edge["target"] for edge in graph["edges"] if edge["source"] == selected]
+            st.info(f"Node: {selected}\n\nPrevious: {', '.join(incoming) or 'none'}\n\nNext: {', '.join(outgoing) or 'none'}")
     except Exception as exc:
         st.error(str(exc))
 
@@ -284,12 +303,23 @@ def graph_page():
 def rag_explorer():
     st.title("RAG Explorer")
     try:
-        st.json(get("/rag/status"))
+        status = get("/rag/status")
+        cols = st.columns(3)
+        cols[0].metric("Indexed chunks", status.get("indexed_chunks", 0))
+        cols[1].metric("Vector DB", status.get("vector_database", "local"))
+        cols[2].metric("Embedding model", status.get("embedding_model", "unknown"))
         query = st.text_input("Local semantic query", "What is the company leave policy?")
         if st.button("Retrieve local chunks"):
             result = post("/run", {"user_request": query, "use_rag": True, "mode": "PROTECTED"})
-            st.json(result.get("retrieved"))
-            st.write(result.get("answer"))
+            retrieved = result.get("retrieved") or {}
+            st.subheader("Retrieved sources")
+            for chunk in retrieved.get("chunks", []):
+                with st.container(border=True):
+                    st.markdown(f"**{chunk.get('source')}** · chunk `{chunk.get('chunk_id')}` · similarity `{chunk.get('similarity')}`")
+                    st.caption(f"Trust: {chunk.get('trust_level')} · Type: {chunk.get('source_type')}")
+                    with st.expander("Preview chunk"):
+                        st.write(chunk.get("content", ""))
+            st.success(result.get("answer", ""))
     except Exception as exc:
         st.error(str(exc))
 
@@ -297,8 +327,22 @@ def rag_explorer():
 def audit_explorer():
     st.title("Audit Explorer")
     try:
-        st.json(get("/audit/verify"))
-        st.json(get("/audit?limit=100"))
+        verification = get("/audit/verify")
+        if verification.get("valid"):
+            st.success("Hash chain verified")
+        else:
+            st.error(verification.get("message"))
+        events = get("/audit?limit=100")["events"]
+        query = st.text_input("Search session, tool, or decision")
+        visible = [event for event in events if not query or query.lower() in json.dumps(event).lower()]
+        st.caption(f"Showing {len(visible)} local events")
+        for event in visible:
+            payload = json.loads(event["payload"]) if isinstance(event.get("payload"), str) else event.get("payload", {})
+            decision = payload.get("decision", {})
+            with st.expander(f"{event['timestamp']} · {event['event']} · {decision.get('decision', 'record')}"):
+                st.write(f"Session: `{event['session_id']}`")
+                st.write(f"Tool: `{payload.get('tool', 'n/a')}` · Risk: `{decision.get('risk_score', 0)}`")
+                st.json(payload)
     except Exception as exc:
         st.error(str(exc))
 
@@ -322,9 +366,18 @@ def risk_analytics():
             decision = payload.get("decision", {})
             if event["event"] == "tool_decision":
                 rows.append({"risk": decision.get("risk_score", 0), "decision": decision.get("decision", ""), "tool": payload.get("tool", "")})
-        st.dataframe(rows, use_container_width=True)
-        if rows:
-            st.bar_chart({"risk": [row["risk"] for row in rows]})
+        if not rows:
+            st.info("No tool decisions yet. Run an agent request to populate analytics.")
+            return
+        cols = st.columns(4)
+        cols[0].metric("Events", len(rows))
+        cols[1].metric("Blocked", sum(row["decision"] == "BLOCK" for row in rows))
+        cols[2].metric("Approvals", sum(row["decision"] == "REQUIRE_APPROVAL" for row in rows))
+        cols[3].metric("Average risk", round(sum(row["risk"] for row in rows) / len(rows), 2))
+        st.subheader("Risk by event")
+        st.line_chart({"risk": [row["risk"] for row in rows]})
+        st.subheader("Structured events")
+        st.dataframe(rows, use_container_width=True, hide_index=True)
     except Exception as exc:
         st.error(str(exc))
 
@@ -334,7 +387,20 @@ def evaluation_page():
     try:
         result = get("/evaluation")
         if result.get("available"):
-            st.json(result["report"])
+            report = result["report"]
+            baseline = report.get("baseline", {})
+            protected = report.get("protected", {})
+            st.subheader("Security effectiveness")
+            cols = st.columns(4)
+            cols[0].metric("Baseline attack success", f"{baseline.get('attack_success_rate', 0):.1%}")
+            cols[1].metric("Protected detection", f"{protected.get('detection_rate', 0):.1%}")
+            cols[2].metric("False positives", f"{protected.get('false_positive_rate', 0):.1%}")
+            cols[3].metric("Security overhead", f"{report.get('security_overhead_ms', 0):.1f} ms")
+            st.bar_chart({"Baseline attack success": [baseline.get("attack_success_rate", 0)],
+                          "Protected detection": [protected.get("detection_rate", 0)],
+                          "Protected false positives": [protected.get("false_positive_rate", 0)]})
+            with st.expander("Full measured report"):
+                st.json(report)
         else:
             st.info(result["message"])
     except Exception as exc:
@@ -344,8 +410,16 @@ def evaluation_page():
 def system_health():
     st.title("System Health")
     try:
-        st.json(get("/local-status"))
-        st.success("External providers disabled; normal operation is localhost-only.")
+        status = get("/local-status")
+        checks = [("Ollama", status.get("reachable")), ("LLM model", status.get("model_installed")),
+                  ("Embedding model", status.get("embedding_model_installed")), ("Vector DB", True),
+                  ("SQLite database", True), ("Offline mode", status.get("offline_mode")),
+                  ("External providers disabled", status.get("external_providers") == "DISABLED")]
+        for name, healthy in checks:
+            with st.container(border=True):
+                st.markdown(f"{'🟢' if healthy else '🔴'} **{name}**  ·  {'READY' if healthy else 'CHECK REQUIRED'}")
+        with st.expander("Technical details"):
+            st.json(status)
     except Exception as exc:
         st.error(str(exc))
 
@@ -404,5 +478,4 @@ pages = {"Agent Console": run_console, "Conversations": conversations_page, "Doc
          "Tool Dependency Graph": graph_page, "RAG Explorer": rag_explorer, "Audit Explorer": audit_explorer,
          "Policy Center": policy_center, "Risk Analytics": risk_analytics, "Evaluation": evaluation_page,
          "System Health": system_health, "Settings": settings_page, "Final Demo": final_demo}
-active_page = page if page in {"Agent Console", "Conversations", "Documents"} else security_page if security_page != "Live Monitor" else analytics_page if analytics_page != "Risk Analytics" else system_page if system_page != "System Health" else "Live Monitor"
-pages[active_page]()
+pages[page]()
