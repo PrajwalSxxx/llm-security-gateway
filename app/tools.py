@@ -8,6 +8,8 @@ from .models import ToolAction
 
 def resolve_allowed_path(path: str) -> Path:
     root = SANDBOX.resolve()
+    # Local models sometimes wrap a Windows path after a backslash.
+    path = path.replace("\r", "").replace("\n", "").strip()
     if path.lower().startswith("sandbox-"):
         path = "documents/" + path[8:]
     candidate = Path(path).expanduser()

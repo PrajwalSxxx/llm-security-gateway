@@ -53,6 +53,8 @@ class RealLocalAgent:
         arguments = decision.get("arguments")
         if not isinstance(tool, str) or not isinstance(arguments, dict):
             raise ValueError("Local model returned a malformed tool action")
+        if isinstance(arguments.get("path"), str):
+            arguments["path"] = arguments["path"].replace("\r", "").replace("\n", "").strip()
         return ToolAction(tool=tool, arguments=arguments, provenance="RAG_DOCUMENT" if from_document else "AGENT_GENERATED")
 
     def final_answer(self, request: str, history: list[dict]) -> str:
